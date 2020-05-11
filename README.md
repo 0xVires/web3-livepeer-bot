@@ -8,7 +8,9 @@ https://t.me/OrchestratorWatcherBot
 **Setup**
 
 Adjust the setup.py file accordingly - You will need to specify your web3 websocket, your telegram ID (for error messages) and the telegram bot token.
-The block_records.txt and telegram-subscriptions.json files are just examples. Those files will be populated while running the scripts. 
+The block_records.txt and telegram-subscriptions.json files are just examples. Those files will be populated while running the scripts.
+
+Keep orchestrator-watcher.py and telegram-subscriptions.py running.
 
 **What does the bot do?**
 
