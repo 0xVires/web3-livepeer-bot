@@ -1,0 +1,218 @@
+import web3
+import json
+import time
+import requests
+from threading import Timer
+from web3 import Web3
+from setup import WS_GETH, WS_INFURA, MY_TELEGRAM_ID, send_message, BONDING_MANAGER_PROXY, BONDING_MANAGER_ABI
+
+w3 = Web3(Web3.WebsocketProvider(WS_GETH))
+
+###
+# Variables
+###
+
+poll_interval = 60
+
+###
+# Contracts, Filters & Classes
+###
+
+bonding_manager_proxy = w3.eth.contract(address=BONDING_MANAGER_PROXY, abi=json.loads(BONDING_MANAGER_ABI))
+
+class Transcoder:
+    # Class Attributes, defaults to true in case script crashes -> no invalid warnings
+    rewardCalled = True
+    isActive = True
+
+    def __init__(self, address, subscriber=[]):
+        self.address = address
+        self.subscriber = subscriber
+
+class ErrorMessage:
+    # For debugging purposes - avoid sending a telegram message of the error for every poll_interval
+    ErrorSent = False
+
+
+###
+# Functions
+###
+
+def update_transcoder_instances():
+    """Reads the subscription file and updates the transcoder dict.
+    """
+    with open("transcoder_subscriptions.json", "r") as f: 
+        ts = json.load(f)
+    # Without resetting the dict (and losing updated variables like .rewardCalled), remove the transcoders that are no longer in the subscriber list
+    noLongerInList = list(set(transcoder.keys()).difference(ts.keys()))
+    for addr in noLongerInList:
+        del transcoder[addr]
+    for address, subscriber in ts.items():
+        if address not in transcoder.keys():
+            transcoder[address] = Transcoder(address, subscriber)
+        else:
+            setattr(transcoder[address], "subscriber", subscriber)
+
+def get_active_transcoders():
+    """Gets all the active transcoders in the Livepeer Pool
+    """
+    first = bonding_manager_proxy.functions.getFirstTranscoderInPool().call()
+    transcoderPoolSize = bonding_manager_proxy.functions.getTranscoderPoolSize().call()
+    activeTranscoders = [first]
+    for i in range(0, transcoderPoolSize-1):
+        activeTranscoders.append(bonding_manager_proxy.functions.getNextTranscoderInPool(activeTranscoders[i]).call())
+    return activeTranscoders
+
+def process_round():
+    """After a new round has begun, check for missed reward calls.
+    
+    Also checks if the transcoder became active/inactive.
+    """
+    activeTranscoders = get_active_transcoders()
+    for address in transcoder:
+        if (transcoder[address].rewardCalled == False and transcoder[address].isActive == True):
+            for chat_id in transcoder[address].subscriber:
+                send_message("NO REWARDS CLAIMED - Orchestrator {} did not claim the rewards in the last round! You did not get any rewards for your stake.".format(address[:8]+"..."), chat_id)
+                time.sleep(1.5)
+        transcoder[address].rewardCalled = False
+        if address not in activeTranscoders:
+            transcoder[address].isActive = False
+            for chat_id in transcoder[address].subscriber:
+                send_message("WARNING - Orchestrator {} is no longer in the active orchestrator set! You will no longer receive rewards for your stake.".format(address[:8]+"..."), chat_id)
+                time.sleep(1.5)
+        elif transcoder[address].isActive == False and address in activeTranscoders:
+            transcoder[address].isActive = True
+            for chat_id in transcoder[address].subscriber:
+                send_message("Orchestrator {} is back in the active orchestrator set! You will get notified if and when rewards are called.".format(address[:8]+"..."), chat_id)
+                time.sleep(1.5)
+
+def check_rewardCut_changes(fromBlock, toBlock):
+    """Checks for changes in the reward & fee cut values between fromBlock and toBlock.
+    
+    If an event exists, get the caller of the event and check if it is in the subscription list.
+    Get the new and old fee and reward cut values and check if either one changed.
+    Send notification to the subscribers.
+    """
+    
+    rewardCut_filter = w3.eth.filter({
+    "fromBlock": fromBlock,
+    "toBlock": toBlock,
+    "address": '0x511Bc4556D823Ae99630aE8de28b9B80Df90eA2e',
+    "topics": ['0x7346854431dbb3eb8e373c604abf89e90f4865b8447e1e2834d7b3e4677bf544'],
+    })
+    for event in rewardCut_filter.get_all_entries():
+        caller = w3.toChecksumAddress("0x" + event["topics"][1].hex()[26:])
+        if caller in transcoder.keys():
+            rewardCut = w3.toInt(hexstr=event["data"][2:][:64])
+            feeShare = w3.toInt(hexstr=event["data"][2:][64:])
+            previousData = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller, int(event["blockNumber"]/5760)).call()
+            pRewardCut = previousData[4]
+            pFeeShare = previousData[5]
+            tx = event["transactionHash"].hex()
+            if rewardCut != pRewardCut or feeShare != pFeeShare:     
+                message = "REWARD AND/OR FEE CUT CHANGE - for Orchestrator {caller}!\n\n" \
+                    "New values:\nReward cut = {rewardCut} (old: {pRewardCut})\n" \
+                    "Fee cut = {feeCut} (old: {pFeeCut})\n" \
+                    "[Transaction link](https://etherscan.io/tx/{tx})".format(
+                        caller = caller[:8]+"...", rewardCut = str(rewardCut/10**4)+"%",
+                        pRewardCut = str(pRewardCut/10**4)+"%", feeCut = str(100-(feeShare/10**4))+"%", 
+                        pFeeCut = str(100-(pFeeShare/10**4))+"%", tx = tx)
+                for chat_id in transcoder[caller].subscriber:
+                    send_message(message, chat_id)
+                    time.sleep(1.5)
+
+def check_rewardCall(fromBlock, toBlock):
+    """Checks for reward transactions between blockOld and block.
+    
+    If an event exists, get the caller of the event and check if it is in the subscription list.
+    Sends notification to the subscribers and sets the rewardCalled attribute for the caller to true.
+    """
+
+    rewardCall_filter = w3.eth.filter({
+    "fromBlock": fromBlock,
+    "toBlock": toBlock,
+    "address": '0x511Bc4556D823Ae99630aE8de28b9B80Df90eA2e',
+    "topics": ['0x619caafabdd75649b302ba8419e48cccf64f37f1983ac4727cfb38b57703ffc9'],
+    })
+    for event in rewardCall_filter.get_all_entries():
+        caller = w3.toChecksumAddress("0x" + event["topics"][1].hex()[26:])
+        if caller in transcoder.keys() and transcoder[caller].rewardCalled == False:
+            tokens = round(w3.toInt(hexstr=event["data"])/10**18,2)
+            roundNr = int(event["blockNumber"]/5760)
+            data = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller,roundNr).call()
+            totalStake = round(data[2]/10**18)
+            rewardCut = data[4]/10**4
+            rewardCutTokens = round(tokens*(rewardCut/10**2),2)
+            tx = event["transactionHash"].hex()
+            message = "Rewards claimed for round {roundNr} -> Orchestrator {caller} received {tokens} LPT " \
+                "for a total stake of {totalStake} LPT (keeping {rewardCutTokens} LPT due to its {rewardCut} reward cut)\n" \
+                "[Transaction link](https://etherscan.io/tx/{tx})".format(
+                roundNr = roundNr, caller = caller[:8]+"...", tokens = tokens, totalStake = totalStake,
+                rewardCutTokens = rewardCutTokens, rewardCut = str(rewardCut)+"%", tx = tx)
+            for chat_id in transcoder[caller].subscriber:
+                send_message(message, chat_id)
+                time.sleep(1.5)
+            transcoder[caller].rewardCalled = True
+
+def check_rewardCall_status(block):
+    """Sends a notification if a transcoder didn't call reward yet but is in the active set
+    """
+    for address in transcoder.keys():
+        if transcoder[address].rewardCalled == False and transcoder[address].isActive == True:
+            for chat_id in transcoder[address].subscriber:
+                send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 5760 in the current round!".format(address[:8]+"...", str(block%5760)), chat_id)
+                time.sleep(1.5)
+
+
+###
+# Loop
+###
+
+
+transcoder = {}
+# Just for debugging: Avoid sending the same telegram exception message every polling interval
+latestError = 0 
+
+def main():
+    with open('block_records.txt', 'r') as fh:
+        blockOld = int(fh.readlines()[-1])
+    while True:
+        try:
+            block = w3.eth.blockNumber
+            roundNumber = int(block/5760)
+            roundNumberOld = int(blockOld/5760)
+            update_transcoder_instances()
+            # In this case, process the previous round from blockOld to the first block of the new round
+            if roundNumber > roundNumberOld:
+                roundStartBlock = roundNumber*5760
+                check_rewardCut_changes(blockOld, roundStartBlock)
+                check_rewardCall(blockOld, roundStartBlock)
+                # Set the blockOld to last processed blocknumber
+                blockOld = roundStartBlock
+                # Write to processed blocks file
+                with open('block_records.txt', 'a') as fh:
+                    fh.write(str(blockOld) + "\n")
+                process_round()
+                roundNumber += 1
+                print("processed round at block {}".format(str(block)))
+            # Run checks once there are at least 500 new blocks since last check
+            if block > blockOld + 500:
+                check_rewardCut_changes(blockOld, block)
+                check_rewardCall(blockOld, block)
+                check_rewardCall_status(block)
+                # Set the blockOld to last processed blocknumber
+                blockOld = block
+                # Write to processed blocks file
+                with open('block_records.txt', 'a') as fh:
+                    fh.write(str(blockOld) + "\n")
+                print("Processed until: " + str(blockOld))
+        except Exception as ex:
+            print(ex)
+            # Only send telegram message if its a different error
+            if str(ex) != latestError:
+                send_message(ex, MY_TELEGRAM_ID)
+                latestError = str(ex)
+        time.sleep(poll_interval)
+
+if __name__ == '__main__':
+    main()
