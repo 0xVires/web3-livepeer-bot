@@ -2,13 +2,16 @@
 Sends telegram notifications about activities of the Livepeer contracts on the Ethereum blockchain.
 
 **Link to the Telegram bot**
+
 https://t.me/OrchestratorWatcherBot
 
 **Setup**
+
 Adjust the setup.py file accordingly - You will need to specify your web3 websocket, your telegram ID (for error messages) and the telegram bot token.
 The block_records.txt and telegram-subscriptions.json files are just examples. Those files will be populated while running the scripts. 
 
 **What does the bot do?**
+
 By writing “/start”, the bot will give you an introduction and informs about the available commands:
 
 * subscribe <orchestrator address>
