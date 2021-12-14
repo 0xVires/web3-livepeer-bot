@@ -176,6 +176,7 @@ transcoder = {}
 latestError = 0 
 
 def main():
+    global latestError
     with open('block_records.txt', 'r') as fh:
         blockOld = int(fh.readlines()[-1])
     while True:
