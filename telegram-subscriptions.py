@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
-import json 
+import json
 import requests
 import time
 from web3 import Web3
-from setup import WS_GETH, WS_INFURA, TEL_URL, MY_TELEGRAM_ID, send_message, BONDING_MANAGER_PROXY, BONDING_MANAGER_ABI
+from setup import WS_ARBITRUM_ALCHEMY, TEL_URL, MY_TELEGRAM_ID, send_message, BONDING_MANAGER_PROXY, BONDING_MANAGER_ABI
 
-w3 = Web3(Web3.WebsocketProvider(WS_GETH))
+w3 = Web3(Web3.WebsocketProvider(WS_ARBITRUM_ALCHEMY))
 
 bonding_manager_proxy = w3.eth.contract(address=BONDING_MANAGER_PROXY, abi=json.loads(BONDING_MANAGER_ABI))
 
