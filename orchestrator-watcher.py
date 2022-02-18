@@ -4,23 +4,24 @@ import web3
 import json
 import time
 import requests
-from threading import Timer
 from web3 import Web3
-from setup import WS_GETH, WS_INFURA, MY_TELEGRAM_ID, send_message, BONDING_MANAGER_PROXY, BONDING_MANAGER_ABI
+from setup import WS_ARBITRUM_ALCHEMY, WS_MAINNET_INFURA, MY_TELEGRAM_ID, send_message, BONDING_MANAGER_PROXY, BONDING_MANAGER_ABI, ROUND_MANAGER_PROXY, ROUND_MANAGER_ABI, TICKET_BROKER_PROXY
 
-w3 = Web3(Web3.WebsocketProvider(WS_GETH))
+w3 = Web3(Web3.WebsocketProvider(WS_ARBITRUM_ALCHEMY))
+w3m = Web3(Web3.WebsocketProvider(WS_MAINNET_INFURA))
 
 ###
 # Variables
 ###
 
-poll_interval = 60
+poll_interval = 300
 
 ###
 # Contracts, Filters & Classes
 ###
 
 bonding_manager_proxy = w3.eth.contract(address=BONDING_MANAGER_PROXY, abi=json.loads(BONDING_MANAGER_ABI))
+round_manager_proxy = w3.eth.contract(address=ROUND_MANAGER_PROXY, abi=json.loads(ROUND_MANAGER_ABI))
 
 class Transcoder:
     # Class Attributes, defaults to true in case script crashes -> no invalid warnings
@@ -99,7 +100,7 @@ def check_rewardCut_changes(fromBlock, toBlock):
     rewardCut_filter = w3.eth.filter({
     "fromBlock": fromBlock,
     "toBlock": toBlock,
-    "address": '0x511Bc4556D823Ae99630aE8de28b9B80Df90eA2e',
+    "address": BONDING_MANAGER_PROXY,
     "topics": ['0x7346854431dbb3eb8e373c604abf89e90f4865b8447e1e2834d7b3e4677bf544'],
     })
     for event in rewardCut_filter.get_all_entries():
@@ -107,15 +108,16 @@ def check_rewardCut_changes(fromBlock, toBlock):
         if caller in transcoder.keys():
             rewardCut = w3.toInt(hexstr=event["data"][2:][:64])
             feeShare = w3.toInt(hexstr=event["data"][2:][64:])
-            previousData = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller, int(event["blockNumber"]/5760)).call()
-            pRewardCut = previousData[4]
-            pFeeShare = previousData[5]
+            roundNr = round_manager_proxy.functions.currentRound().call()
+            previousData = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller, roundNr).call()
+            pRewardCut = previousData[1]
+            pFeeShare = previousData[2]
             tx = event["transactionHash"].hex()
             if rewardCut != pRewardCut or feeShare != pFeeShare:     
                 message = "REWARD AND/OR FEE CUT CHANGE - for Orchestrator {caller}!\n\n" \
                     "New values:\nReward cut = {rewardCut} (old: {pRewardCut})\n" \
                     "Fee cut = {feeCut} (old: {pFeeCut})\n" \
-                    "[Transaction link](https://etherscan.io/tx/{tx})".format(
+                    "[Transaction link](https://arbiscan.io/tx/{tx})".format(
                         caller = caller[:8]+"...", rewardCut = str(rewardCut/10**4)+"%",
                         pRewardCut = str(pRewardCut/10**4)+"%", feeCut = str(100-(feeShare/10**4))+"%", 
                         pFeeCut = str(100-(pFeeShare/10**4))+"%", tx = tx)
@@ -133,22 +135,22 @@ def check_rewardCall(fromBlock, toBlock):
     rewardCall_filter = w3.eth.filter({
     "fromBlock": fromBlock,
     "toBlock": toBlock,
-    "address": '0x511Bc4556D823Ae99630aE8de28b9B80Df90eA2e',
+    "address": BONDING_MANAGER_PROXY,
     "topics": ['0x619caafabdd75649b302ba8419e48cccf64f37f1983ac4727cfb38b57703ffc9'],
     })
     for event in rewardCall_filter.get_all_entries():
         caller = w3.toChecksumAddress("0x" + event["topics"][1].hex()[26:])
         if caller in transcoder.keys() and transcoder[caller].rewardCalled == False:
             tokens = round(w3.toInt(hexstr=event["data"])/10**18,2)
-            roundNr = int(event["blockNumber"]/5760)
-            data = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller,roundNr).call()
-            totalStake = round(data[2]/10**18)
-            rewardCut = data[4]/10**4
+            roundNr = round_manager_proxy.functions.currentRound().call()
+            data = bonding_manager_proxy.functions.getTranscoderEarningsPoolForRound(caller, roundNr).call()
+            totalStake = round(data[0]/10**18)
+            rewardCut = data[1]/10**4
             rewardCutTokens = round(tokens*(rewardCut/10**2),2)
             tx = event["transactionHash"].hex()
             message = "Rewards claimed for round {roundNr} -> Orchestrator {caller} received {tokens} LPT " \
                 "for a total stake of {totalStake} LPT (keeping {rewardCutTokens} LPT due to its {rewardCut} reward cut)\n" \
-                "[Transaction link](https://etherscan.io/tx/{tx})".format(
+                "[Transaction link](https://arbiscan.io/tx/{tx})".format(
                 roundNr = roundNr, caller = caller[:8]+"...", tokens = tokens, totalStake = totalStake,
                 rewardCutTokens = rewardCutTokens, rewardCut = str(rewardCut)+"%", tx = tx)
             for chat_id in transcoder[caller].subscriber:
@@ -165,6 +167,49 @@ def check_rewardCall_status(block):
                 send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 5760 in the current round!".format(address[:8]+"...", str(block%5760)), chat_id)
                 time.sleep(1.5)
 
+def check_ticketRedemption(fromBlock, toBlock):
+    """Checks for ticket redemptions between blockOld and block.
+    
+    If an event exists, get the caller of the event and check if it is in the subscription list.
+    Sends notification to the subscribers.
+    """
+    ticket_filter = w3.eth.filter({
+    "fromBlock": fromBlock,
+    "toBlock": toBlock,
+    "address": TICKET_BROKER_PROXY,
+    "topics": ['0x8b87351a208c06e3ceee59d80725fd77a23b4129e1b51ca231fc89b40712649c']})
+    for event in ticket_filter.get_all_entries():
+        caller = w3.toChecksumAddress("0x" + event["topics"][2].hex()[26:])
+        if caller in transcoder.keys():
+            ticketValue = round(w3.toInt(hexstr=event["data"])/10**18, 4)
+            feeShare = bonding_manager_proxy.functions.getTranscoder(caller).call()[2]/10**6
+            ticketShare = round(ticketValue*feeShare, 4)
+            tx = event["transactionHash"].hex()
+            message = "Orchestrator {caller} redeemed a winning ticket worth {ticketValue} ETH!\n\n" \
+                "Its delegators share {ticketShare} ETH due to its {feeCut}% fee cut.\n" \
+                "[Transaction link](https://arbiscan.io/tx/{tx})".format(
+                    caller = caller[:8]+"...", ticketValue = ticketValue, ticketShare = ticketShare, 
+                    feeCut = round((1-feeShare)*100), tx = tx)
+            for chat_id in transcoder[caller].subscriber:
+                send_message(message, chat_id)
+                time.sleep(1.5)
+
+def check_round_change(fromBlock, toBlock):
+    """Checks for round initilized txs between blockOld and block.
+    
+    If an event exists, get the blocknumber of this tx and the round number
+    """
+    round_filter = w3.eth.filter({
+    "fromBlock": fromBlock,
+    "toBlock": toBlock,
+    "address": ROUND_MANAGER_PROXY,
+    "topics": ['0x22f2fc17c5daf07db2379b3a03a8ef20a183f761097a58fce219c8a14619e786'],
+    })
+    result = round_filter.get_all_entries()
+    if result:
+        return result[0]["blockNumber"], w3.toInt(result[0]["topics"][1])
+    else:
+        return None, None
 
 ###
 # Loop
@@ -177,38 +222,54 @@ latestError = 0
 
 def main():
     global latestError
-    with open('block_records.txt', 'r') as fh:
-        blockOld = int(fh.readlines()[-1])
+    # Mainnet
+    with open('mainnet_block_records.txt', 'r') as fh:
+        mainnetBlockOld = int(fh.readlines()[-1])
+    # Arbitrum
+    with open('arbitrum_block_records.txt', 'r') as fh:
+        arbitrumBlockOld = int(fh.readlines()[-1])
+    # Rounds
+    with open('roundNr_records.txt', 'r') as fh:
+        roundNrOld = int(fh.readlines()[-1])
     while True:
         try:
-            block = w3.eth.blockNumber
-            roundNumber = int(block/5760)
-            roundNumberOld = int(blockOld/5760)
+            arbitrumBlock = w3.eth.blockNumber
+            mainnetBlock = w3m.eth.blockNumber
             update_transcoder_instances()
-            # In this case, process the previous round from blockOld to the first block of the new round
-            if roundNumber > roundNumberOld:
-                roundStartBlock = roundNumber*5760
-                check_rewardCut_changes(blockOld, roundStartBlock)
-                check_rewardCall(blockOld, roundStartBlock)
+            roundStartBlock, roundNr = check_round_change(arbitrumBlockOld, arbitrumBlock)
+            if roundStartBlock and roundNr > roundNrOld:
+                # In this case, process the previous round from blockOld to the first block of the new round
+                check_rewardCut_changes(arbitrumBlockOld, roundStartBlock)
+                check_rewardCall(arbitrumBlockOld, roundStartBlock)
+                check_ticketRedemption(arbitrumBlockOld, roundStartBlock)
                 # Set the blockOld to last processed blocknumber
-                blockOld = roundStartBlock
-                # Write to processed blocks file
-                with open('block_records.txt', 'a') as fh:
-                    fh.write(str(blockOld) + "\n")
+                mainnetBlockOld = roundNr*5760 # this can be caluclated based on the previous round
+                arbitrumBlockOld = roundStartBlock
+                roundNrOld = roundNr # otherwise we process the same round again and again due to the above assignment
+                # Write to processed blocks to both files - in case we need to restart the script
+                with open('mainnet_block_records.txt', 'a') as fh:
+                    fh.write(str(mainnetBlockOld) + "\n")
+                with open('arbitrum_block_records.txt', 'a') as fh:
+                    fh.write(str(arbitrumBlockOld) + "\n")
+                with open('roundNr_records.txt', 'a') as fh:
+                    fh.write(str(roundNrOld) + "\n")
                 process_round()
-                roundNumber += 1
-                print("processed round at block {}".format(str(block)))
+                print("processed round at block {}".format(str(arbitrumBlockOld)))
             # Run checks once there are at least 500 new blocks since last check
-            if block > blockOld + 500:
-                check_rewardCut_changes(blockOld, block)
-                check_rewardCall(blockOld, block)
-                check_rewardCall_status(block)
+            if mainnetBlock > mainnetBlockOld + 500:
+                check_rewardCut_changes(arbitrumBlockOld, arbitrumBlock)
+                check_rewardCall(arbitrumBlockOld, arbitrumBlock)
+                check_rewardCall_status(mainnetBlock) #we only use the block for the notification, no query necessary
+                check_ticketRedemption(arbitrumBlockOld, arbitrumBlock)
                 # Set the blockOld to last processed blocknumber
-                blockOld = block
+                mainnetBlockOld = mainnetBlock
+                arbitrumBlockOld = arbitrumBlock
                 # Write to processed blocks file
-                with open('block_records.txt', 'a') as fh:
-                    fh.write(str(blockOld) + "\n")
-                print("Processed until: " + str(blockOld))
+                with open('mainnet_block_records.txt', 'a') as fh:
+                    fh.write(str(mainnetBlockOld) + "\n")
+                with open('arbitrum_block_records.txt', 'a') as fh:
+                    fh.write(str(arbitrumBlockOld) + "\n")
+                print("Processed until: " + str(arbitrumBlockOld))
         except Exception as ex:
             print(ex)
             # Only send telegram message if its a different error
