@@ -93,9 +93,9 @@ def checkMessage(updates):
                 send_message("Welcome to the Orchestrator-Watcher bot!\n\nThis bot is provided by the " \
                     "[0x525-Transcoder](https://forum.livepeer.org/t/transcoder-campaign-0x525-with-telegram-bot/588), " \
                     "Discord: vires-in-numeris. Tips to 0x525419FF5707190389bfb5C87c375D710F5fCb0E are appreciated, thank you!\n\n" \
-                    "The following commands are available:\n - *subscribe* <orchestrator address>\n - *remove* <orchestrator address>\n - " \
-                    "*subscriptions*\n\nPlease enter *subscribe* followed by the orchestrator address " \
-                    "(e.g. 'subscribe 0x525419FF5707190389bfb5C87c375D710F5fCb0E') to get notified about the following events:\n - " \
+                    "The following commands are available:\n - */subscribe* <orchestrator address>\n - */remove* <orchestrator address>\n - " \
+                    "*/subscriptions*\n\nPlease enter */subscribe* followed by the orchestrator address " \
+                    "(e.g. '/subscribe 0x525419FF5707190389bfb5C87c375D710F5fCb0E') to get notified about the following events:\n - " \
                     "reward calls\n - missed reward calls\n - when the reward/fee cut changes\n - orchestrator becomes inactive\n\n" \
                     "If you no longer want to be notified, enter *remove* followed the orchestrator address.\n\n" \
                     "If you want to check your subscriptions, enter *subscriptions*.", chat_id)
