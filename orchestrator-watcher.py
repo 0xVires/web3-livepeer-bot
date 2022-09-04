@@ -184,15 +184,27 @@ def check_ticketRedemption(fromBlock, toBlock):
             ticketValue = round(w3.toInt(hexstr=event["data"])/10**18, 4)
             feeShare = bonding_manager_proxy.functions.getTranscoder(caller).call()[2]/10**6
             ticketShare = round(ticketValue*feeShare, 4)
-            tx = event["transactionHash"].hex()
-            message = "Orchestrator {caller} redeemed a winning ticket worth {ticketValue} ETH!\n\n" \
-                "Its delegators share {ticketShare} ETH due to its {feeCut}% fee cut.\n" \
-                "[Transaction link](https://arbiscan.io/tx/{tx})".format(
-                    caller = caller[:8]+"...", ticketValue = ticketValue, ticketShare = ticketShare, 
-                    feeCut = round((1-feeShare)*100), tx = tx)
-            for chat_id in transcoder[caller].subscriber:
-                send_message(message, chat_id)
-                time.sleep(1.5)
+            with open("winning_tickets.json") as f:
+                wt = json.load(f)
+            if wt.get(caller):
+                wt[caller]["value"].append(ticketValue)
+                wt[caller]["share"].append(ticketShare)
+            else:
+                wt[caller] = {'value': [ticketValue], 'share': [ticketShare]}
+            if sum(wt[caller]["value"]) > 0.1:
+                message = "Since the last payout notification, Orchestrator {caller_short} earned {ticketValue} ETH for transcoding!\n" \
+                "Out of those, its delegators share {ticketShare} ETH. The Orchestrator's current fee cut is {feeCut}%\n" \
+                "[Check arbiscan for the txs](https://arbiscan.io/address/{caller})".format(
+                    caller_short = caller[:8]+"...", ticketValue = round(sum(wt[caller]["value"]), 3), 
+                    ticketShare = round(sum(wt[caller]["share"]), 3), feeCut = round((1-feeShare)*100), caller = caller)
+                for chat_id in transcoder[caller].subscriber:
+                    send_message(message, chat_id)
+                    time.sleep(1.5)
+                #delete values if messages were sent
+                wt[caller]["value"], wt[caller]["share"] = [], []
+            #save file
+            with open("winning_tickets.json", "w") as f:
+                json.dump(wt, f, indent=1)
 
 def check_round_change(fromBlock, toBlock):
     """Checks for round initilized txs between blockOld and block.
