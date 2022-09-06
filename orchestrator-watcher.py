@@ -191,7 +191,15 @@ def check_ticketRedemption(fromBlock, toBlock):
                 wt[caller]["share"].append(ticketShare)
             else:
                 wt[caller] = {'value': [ticketValue], 'share': [ticketShare]}
-            if sum(wt[caller]["value"]) > 0.1:
+            stake = round(bonding_manager_proxy.functions.transcoderTotalStake(caller).call()/10**18,-5)
+            roundedStake = round(stake, -5)
+            if roundedStake == 0:
+                LIMIT = 0.01
+            elif roundedStake >= 1000000:
+                LIMIT = 0.1
+            else:
+                LIMIT = roundedStake/10**7
+            if sum(wt[caller]["value"]) > LIMIT:
                 message = "Since the last payout notification, Orchestrator {caller_short} earned {ticketValue} ETH for transcoding!\n" \
                 "Out of those, its delegators share {ticketShare} ETH. The Orchestrator's current fee cut is {feeCut}%\n" \
                 "[Check arbiscan for the txs](https://arbiscan.io/address/{caller})".format(
