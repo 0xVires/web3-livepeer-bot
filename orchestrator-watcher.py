@@ -164,7 +164,7 @@ def check_rewardCall_status(block):
     for address in transcoder.keys():
         if transcoder[address].rewardCalled == False and transcoder[address].isActive == True:
             for chat_id in transcoder[address].subscriber:
-                send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 5760 in the current round!".format(address[:8]+"...", str(block%5760)), chat_id)
+                send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 6377 in the current round!".format(address[:8]+"...", str(block%5760)), chat_id)
                 time.sleep(1.5)
 
 def check_ticketRedemption(fromBlock, toBlock):
@@ -263,7 +263,7 @@ def main():
                 check_rewardCall(arbitrumBlockOld, roundStartBlock)
                 check_ticketRedemption(arbitrumBlockOld, roundStartBlock)
                 # Set the blockOld to last processed blocknumber
-                mainnetBlockOld = roundNr*5760 # this can be caluclated based on the previous round
+                mainnetBlockOld = roundNr*6377 # this can be caluclated based on the previous round
                 arbitrumBlockOld = roundStartBlock
                 roundNrOld = roundNr # otherwise we process the same round again and again due to the above assignment
                 # Write to processed blocks to both files - in case we need to restart the script
