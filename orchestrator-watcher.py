@@ -263,7 +263,7 @@ def main():
                 check_rewardCall(arbitrumBlockOld, roundStartBlock)
                 check_ticketRedemption(arbitrumBlockOld, roundStartBlock)
                 # Set the blockOld to last processed blocknumber
-                mainnetBlockOld = roundNr*6377 # this can be caluclated based on the previous round
+                mainnetBlockOld = round_manager_proxy.functions.currentRoundStartBlock().call()
                 arbitrumBlockOld = roundStartBlock
                 roundNrOld = roundNr # otherwise we process the same round again and again due to the above assignment
                 # Write to processed blocks to both files - in case we need to restart the script
