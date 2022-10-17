@@ -164,7 +164,7 @@ def check_rewardCall_status(block):
     for address in transcoder.keys():
         if transcoder[address].rewardCalled == False and transcoder[address].isActive == True:
             for chat_id in transcoder[address].subscriber:
-                send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 6377 in the current round!".format(address[:8]+"...", str(block%5760)), chat_id)
+                send_message("WARNING - Orchestrator {} did not yet claim rewards at block {} of 6377 in the current round!".format(address[:8]+"...", str(block%6377)), chat_id)
                 time.sleep(1.5)
 
 def check_ticketRedemption(fromBlock, toBlock):
